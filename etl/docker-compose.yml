@@ -1,0 +1,56 @@
+version: "3.8"
+services:
+  elasticsearch:
+    image: ghcr.io/hirotasoshu/movies-es:latest
+    build:
+      context: ./docker/es
+      dockerfile: Dockerfile
+      args:
+        DISCOVERY_TYPE: single-node
+    ports:
+      - '9200:9200'
+    volumes:
+      - elasticdata:/usr/share/elasticsearch/data
+
+  redis:
+    image: redis:6-alpine
+    restart: always
+    volumes:
+      - redisdata:/data
+    ports:
+      - '6379:6379'
+
+  postgres:
+    image: postgres:16
+    restart: "unless-stopped"
+    env_file:
+      - config/.env
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 2s
+      timeout: 3s
+      retries: 40
+    volumes:
+      - ./database_dump.sql:/docker-entrypoint-initdb.d/init.sql
+
+  etl:
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/etl/Dockerfile
+    depends_on:
+      postgres:
+          condition: service_healthy
+      elasticsearch:
+            condition: service_started
+      redis:
+        condition: service_started
+    env_file:
+      - ./config/.env
+    command: python main.py
+
+
+
+volumes:
+  elasticdata:
+  redisdata:
