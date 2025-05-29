@@ -35,40 +35,37 @@ class ElasticLoader:
         """Создать новое подключение для ES"""
         return Elasticsearch([f"{self._config.host}:{self._config.port}"])
 
-    @backoff.on_exception(**BACKOFF_CONFIG)
     def _generate_docs(
         self, data: Iterator[Tuple[dict, str]], itersize: int, index: str
-    ) -> Iterator[dict]:
+    ) -> Tuple[Iterator[dict], str]:
         """
         Генерирует документы для bulk-загрузки в Elasticsearch.
         Каждые `itersize` записей сохраняет последний modified в storage.
-        После завершения — сохраняет последний modified, если был.
+        Возвращает генератор и последний modified (для финального сохранения после успешной загрузки).
         """
         i = 0
         last_modified = ""
         key = f"load_from_{index}"
 
-        for movie, modified in data:
-            i += 1
-            last_modified = modified
+        def generator():
+            nonlocal i, last_modified
+            for movie, modified in data:
+                i += 1
+                last_modified = modified
 
-            # Генерируем документ с нужной структурой для bulk-загрузки
-            yield {
-                "_index": index,
-                "_id": movie["id"],
-                "_source": movie,
-            }
+                yield {
+                    "_index": index,
+                    "_id": movie["id"],
+                    "_source": movie,
+                }
 
-            if i % itersize == 0:
-                self._storage.save_state(key, last_modified)
-                logger.debug(
-                    "Saved state after %d items: %s = %s", i, key, last_modified
-                )
+                if i % itersize == 0:
+                    self._storage.save_state(key, last_modified)
+                    logger.debug(
+                        "Saved state after %d items: %s = %s", i, key, last_modified
+                    )
 
-        # После окончания генерации сохраняем последний modified
-        if last_modified:
-            self._storage.save_state(key, last_modified)
-            logger.debug("Final state saved: %s = %s", key, last_modified)
+        return generator(), last_modified
 
     @backoff.on_exception(**BACKOFF_CONFIG)
     def upload_data(
@@ -76,8 +73,9 @@ class ElasticLoader:
     ) -> None:
         """Загружает данные в ES используя итератор"""
         t = time.perf_counter()
+        key = f"load_from_{index}"
 
-        docs_generator = self._generate_docs(data, itersize, index)
+        docs_generator, last_modified = self._generate_docs(data, itersize, index)
 
         lines, _ = helpers.bulk(
             client=self.elastic_connection,
@@ -92,3 +90,8 @@ class ElasticLoader:
             logger.info("Nothing to update for index %s", index)
         else:
             logger.info("%s lines saved in %s for index %s", lines, elapsed, index)
+
+            # Финальное сохранение состояния только после успешной загрузки
+            if last_modified:
+                self._storage.save_state(key, last_modified)
+                logger.debug("Final state saved: %s = %s", key, last_modified)
