@@ -1,14 +1,15 @@
-FROM elasticsearch:7.10.1 AS builder
+FROM elasticsearch:9.0.2
 
-ARG DISCOVERY_TYPE
-ENV "discovery.type"=${DISCOVERY_TYPE}
+ENV discovery.type=single-node
+ENV xpack.security.enabled=false
 
-ADD preload.sh genres.json persons.json movies.json /
+COPY preload.sh genres.json persons.json movies.json /
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
-RUN chmod +x '/preload.sh' \
-    && /usr/local/bin/docker-entrypoint.sh elasticsearch -d -E path.data=/tmp/data \
-    && while [[ "$(curl -s -o /dev/null -w '%{http_code}' localhost:9200)" != "200" ]]; do sleep 1; done \
-    && /preload.sh
+USER root
+RUN chmod +x /preload.sh /usr/local/bin/entrypoint.sh
 
-FROM builder
-COPY --from=builder /tmp/data/ /usr/share/elasticsearch/data/
+USER elasticsearch
+
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
